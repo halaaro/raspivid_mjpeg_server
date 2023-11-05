@@ -1,0 +1,17 @@
+<!doctype html>
+<html>
+<head>
+	<title>Bus Cam</title>
+	<link rel="icon" type="image/png" href="/favicon.png">
+	<style>
+	html { min-height: 100vh }
+	body, html { margin: 0; padding: 0; background-color: #444; }
+	h1 { position: absolute; left: 10px; top: 10px; color: white; font-family: Consolas, Console, Arial; }
+	</style>
+	<script src="https://unpkg.com/htmx.org@1.9.7"></script>
+</head>
+<body>
+	<img src="/video.mjpg" style="height: 100%; width: 100%">
+	{% include "partials/time.html" %}
+</body>
+</html>

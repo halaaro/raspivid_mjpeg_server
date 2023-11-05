@@ -1,20 +1,15 @@
 use {
     hyper::{
         service::{make_service_fn, service_fn},
-        Body,
-        StatusCode,
-        Request,
-        Response,
-        Result,
-        Server,
+        Body, body::Bytes, Request, Response, Result, Server, StatusCode,
     },
-
-    std::net::SocketAddr,
-    std::io::{Read, BufRead},
-    std::time::{Duration, Instant},
+    minijinja::context,
     std::fs,
+    std::io::{BufRead, Read},
+    std::net::SocketAddr,
+    std::time::{Duration, Instant},
     structopt::StructOpt,
-    tokio::stream::{StreamExt},
+    tokio::stream::StreamExt,
     tokio::sync::watch,
 };
 
@@ -33,33 +28,95 @@ struct Opt {
     port: u16,
 }
 
-static HEAD: &[u8] = "\r\n--7b3cc56e5f51db803f790dad720ed50a\r\nContent-Type: image/jpeg\r\nContent-Length: ".as_bytes();
+static HEAD: &[u8] =
+    "\r\n--7b3cc56e5f51db803f790dad720ed50a\r\nContent-Type: image/jpeg\r\nContent-Length: "
+        .as_bytes();
 static RNRN: &[u8] = "\r\n\r\n".as_bytes();
 
-async fn serve_req(_req: Request<Body>, rx: watch::Receiver<Vec<u8>>) -> Result<Response<Body>> {
-    // Convert the watch stream of Vec<u8>s into a Result stream for Body::wrap_stream.
-    let result_stream = rx.map(|buffer| Result::Ok(buffer) );
-    let body = Body::wrap_stream(result_stream);
-    Ok(Response::builder()
-        .status(StatusCode::OK)
-        .header("Content-Type", "multipart/x-mixed-replace; boundary=--7b3cc56e5f51db803f790dad720ed50a") // MJPEG stream.
-        .body(body) // Send out the body stream.
-        .unwrap())
+async fn serve_req(req: Request<Body>, rx: watch::Receiver<Vec<u8>>) -> Result<Response<Body>> {
+    let path = match req.uri().path() {
+        "" | "/" => "index.html",
+        s => s.trim_start_matches('/'),
+    };
+    let mut env = minijinja::Environment::new();
+    env.set_loader(minijinja::path_loader("templates"));
+    let time = std::process::Command::new("date")
+        .output()
+        .map(|o| o.stdout)
+        .unwrap_or_else(|_| vec![b'?']);
+    let time = String::from_utf8(time).unwrap();
+
+    match path {
+        "video.mjpg" => {
+            // Convert the watch stream of Vec<u8>s into a Result stream for Body::wrap_stream.
+            let result_stream = rx.map(|buffer| Result::Ok(buffer));
+            let body = Body::wrap_stream(result_stream);
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header(
+                    "Content-Type",
+                    "multipart/x-mixed-replace; boundary=--7b3cc56e5f51db803f790dad720ed50a",
+                ) // MJPEG stream.
+                .body(body) // Send out the body stream.
+                .unwrap())
+        }
+        "time" => {
+            let content = env
+                .get_template("partials/time.html")
+                .unwrap()
+                .render(context!(time, time_is_close=>true))
+                .unwrap();
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "text/html")
+                .body(content.into())
+                .unwrap())
+        }
+        "index.html" => {
+            let content = env
+                .get_template("index.html")
+                .unwrap()
+                .render(context!(time))
+                .unwrap();
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "text/html")
+                .body(Bytes::from(content).into())
+                .unwrap())
+        }
+        "favicon.png"  => {
+            let mut content = vec![];
+            let mut f = std::fs::File::open("public/favicon.png").unwrap();
+            f.read_to_end(&mut content).unwrap();
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "image/png")
+                .body(content.into())
+                .unwrap())
+        }
+        _ => {
+            eprintln!("not found: {:?}", req.uri());
+            Ok(Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .header("Content-Type", "text/html")
+                .body("<h4>404</h4><p>these are not the droids you are looking for...</p>".into())
+                .unwrap())
+        }
+    }
 }
 
 async fn run_server(addr: SocketAddr, rx: watch::Receiver<Vec<u8>>) {
     println!("Listening on http://{}", addr);
     // Bind the Hyper HTTP server to addr and start serving requests.
-    let serve_future = Server::bind(&addr)
-        .serve(make_service_fn(|_| {
-            // This function is invoked on every request.
-            // We need to clone rx to avoid moving it to this request.
-            let my_rx = rx.clone();
-            async {
-                // We need to clone my_rx because of the async block.
-                Ok::<_, hyper::Error>(service_fn(move |_req| serve_req(_req, my_rx.clone() )))
-            }
-        }));
+    let serve_future = Server::bind(&addr).serve(make_service_fn(|_| {
+        // This function is invoked on every request.
+        // We need to clone rx to avoid moving it to this request.
+        let my_rx = rx.clone();
+        async {
+            // We need to clone my_rx because of the async block.
+            Ok::<_, hyper::Error>(service_fn(move |_req| serve_req(_req, my_rx.clone())))
+        }
+    }));
 
     if let Err(e) = serve_future.await {
         eprintln!("Server error: {}", e);
@@ -73,10 +130,10 @@ fn send_jpeg(tx: &watch::Sender<Vec<u8>>, output_buffer: &mut Vec<u8>, jpeg: &Ve
     output_buffer.extend_from_slice(&jpeg.len().to_string().as_bytes());
     output_buffer.extend_from_slice(&RNRN);
     output_buffer.extend_from_slice(&jpeg.as_slice());
-    
+
     // Send the output_buffer to all the open client responses.
     match tx.broadcast(output_buffer.clone()) {
-        _ => ()
+        _ => (),
     }
 }
 
@@ -96,7 +153,11 @@ fn file_send_loop(filenames: Vec<String>, tx: watch::Sender<Vec<u8>>, delay: Dur
 
             // Try to maintain a stable frame rate. E.g. if the delay is 1 ms, the first frame should trigger at 0 ms, next at 1 ms, 2 ms, 3 ms, ..., 997 ms, 998 ms, 999 ms, etc.
             let elapsed = now.elapsed();
-            std::thread::sleep((delay * frame).checked_sub(elapsed).unwrap_or(Duration::new(0, 0)));
+            std::thread::sleep(
+                (delay * frame)
+                    .checked_sub(elapsed)
+                    .unwrap_or(Duration::new(0, 0)),
+            );
         }
     }
 }
@@ -122,14 +183,20 @@ fn stdin_send_loop(tx: watch::Sender<Vec<u8>>) {
         while !in_jpeg {
             // Read until the next potential image start marker. This strips out the MJPEG headers in raspivid output.
             in_jpeg = match reader.read_until(0xFF, &mut jpeg) {
-                Ok(0) => { panic!("EOF") },
+                Ok(0) => {
+                    panic!("EOF")
+                }
                 // JPEG starts with 0xFF 0xD8 0xFF.
-                Ok(_n) => jpeg.len() > 2 && jpeg[jpeg.len()-3] == 0xFF && jpeg[jpeg.len()-2] == 0xD8,
-                Err(error) => { panic!("IO error: {}", error) },
+                Ok(_n) => {
+                    jpeg.len() > 2 && jpeg[jpeg.len() - 3] == 0xFF && jpeg[jpeg.len() - 2] == 0xD8
+                }
+                Err(error) => {
+                    panic!("IO error: {}", error)
+                }
             };
         }
         // Keep the last three bytes of jpeg, making jpeg == 0xFF 0xD8 0xFF.
-        jpeg = jpeg[jpeg.len()-3..].to_vec();
+        jpeg = jpeg[jpeg.len() - 3..].to_vec();
 
         // Read the rest of the JPEG image data, block by block.
         let mut valid_jpeg = true;
@@ -140,9 +207,11 @@ fn stdin_send_loop(tx: watch::Sender<Vec<u8>>) {
             let b = byt[0];
             jpeg.push(b);
 
-            if b == 0xD9 { // End of image marker.
+            if b == 0xD9 {
+                // End of image marker.
                 break;
-            } else if b == 0x00 || (b >= 0xD0 && b <= 0xD7) { // Escaped 0xFF or scan reset marker.
+            } else if b == 0x00 || (b >= 0xD0 && b <= 0xD7) {
+                // Escaped 0xFF or scan reset marker.
                 if !inside_scan {
                     println!("0xFF escape or scan reset outside scan data {}", b);
                     valid_jpeg = false;
@@ -150,17 +219,20 @@ fn stdin_send_loop(tx: watch::Sender<Vec<u8>>) {
                 }
                 // Find the next marker.
                 reader.read_until(0xFF, &mut jpeg).unwrap();
-            } else if b >= 0xC0 && b <= 0xFE { // Marker with length. Read the length and the content.
+            } else if b >= 0xC0 && b <= 0xFE {
+                // Marker with length. Read the length and the content.
                 inside_scan = b == 0xDA; // Start of Scan.
                 reader.read_exact(&mut len_buf).unwrap();
-                let len:usize = (len_buf[0] as usize * 256) + (len_buf[1] as usize) - 2;
+                let len: usize = (len_buf[0] as usize * 256) + (len_buf[1] as usize) - 2;
                 jpeg.extend_from_slice(&len_buf.as_slice());
-                data_buf.resize(len+1, 0);
+                data_buf.resize(len + 1, 0);
                 reader.read_exact(&mut data_buf).unwrap();
                 jpeg.extend_from_slice(&data_buf.as_slice());
                 let end = data_buf[len];
-                if end != 0xFF { // Markers must be followed by markers.
-                    if inside_scan { // Unless we are inside compressed image data.
+                if end != 0xFF {
+                    // Markers must be followed by markers.
+                    if inside_scan {
+                        // Unless we are inside compressed image data.
                         reader.read_until(0xFF, &mut jpeg).unwrap();
                     } else {
                         println!("Marker not followed by marker {}", end);
@@ -168,7 +240,8 @@ fn stdin_send_loop(tx: watch::Sender<Vec<u8>>) {
                         break;
                     }
                 }
-            } else { // Invalid marker.
+            } else {
+                // Invalid marker.
                 println!("Invalid marker {}", b);
                 valid_jpeg = false;
                 break;
@@ -200,14 +273,22 @@ async fn main() {
 
     match opt.filename {
         Some(filename) => {
-            let filenames: Vec<_> = if filename == "-" { // If the filename is `-`, read the filenames from STDIN.
-                std::io::BufReader::with_capacity(4096, std::io::stdin()).lines().map(|l| l.unwrap()).collect()
-            } else { // Otherwise, read the filenames from the file.
-                fs::read(filename).unwrap().lines().map(|l| l.unwrap()).collect()
+            let filenames: Vec<_> = if filename == "-" {
+                // If the filename is `-`, read the filenames from STDIN.
+                std::io::BufReader::with_capacity(4096, std::io::stdin())
+                    .lines()
+                    .map(|l| l.unwrap())
+                    .collect()
+            } else {
+                // Otherwise, read the filenames from the file.
+                fs::read(filename)
+                    .unwrap()
+                    .lines()
+                    .map(|l| l.unwrap())
+                    .collect()
             };
             file_send_loop(filenames, tx, Duration::from_micros(opt.delay))
-        },
+        }
         None => stdin_send_loop(tx),
     }
-
 }

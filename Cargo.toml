@@ -10,3 +10,4 @@ edition = "2018"
 hyper = "0.13.5"
 tokio = { version = "0.2", features = ["full"] }
 structopt = "0.3.14"
+minijinja = { version = "1.0.9", features = ["loader"] }
