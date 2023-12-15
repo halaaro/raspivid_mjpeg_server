@@ -1,3 +1,5 @@
+use hyper::Method;
+
 use {
     hyper::{
         body::Bytes,
@@ -45,16 +47,18 @@ async fn serve_req(req: Request<Body>, rx: watch::Receiver<Vec<u8>>) -> Result<R
         s => s.trim_start_matches('/'),
     };
     let mut env = minijinja::Environment::new();
-    env.add_template(stringify!(TEMPLATE_INDEX), TEMPLATE_INDEX).unwrap();
-    env.add_template(stringify!(TEMPLATE_TIME), TEMPLATE_TIME).unwrap();
+    env.add_template(stringify!(TEMPLATE_INDEX), TEMPLATE_INDEX)
+        .unwrap();
+    env.add_template(stringify!(TEMPLATE_TIME), TEMPLATE_TIME)
+        .unwrap();
     let time = std::process::Command::new("date")
         .output()
         .map(|o| o.stdout)
         .unwrap_or_else(|_| vec![b'?']);
     let time = String::from_utf8(time).unwrap();
 
-    match path {
-        "video.mjpg" => {
+    match (req.method().clone(), path) {
+        (Method::GET, "video.mjpg") => {
             // Convert the watch stream of Vec<u8>s into a Result stream for Body::wrap_stream.
             let result_stream = rx.map(|buffer| Result::Ok(buffer));
             let body = Body::wrap_stream(result_stream);
@@ -67,7 +71,7 @@ async fn serve_req(req: Request<Body>, rx: watch::Receiver<Vec<u8>>) -> Result<R
                 .body(body) // Send out the body stream.
                 .unwrap())
         }
-        "time" => {
+        (Method::GET, "time") => {
             let content = env
                 .get_template(stringify!(TEMPLATE_TIME))
                 .unwrap()
@@ -79,7 +83,7 @@ async fn serve_req(req: Request<Body>, rx: watch::Receiver<Vec<u8>>) -> Result<R
                 .body(content.into())
                 .unwrap())
         }
-        "index.html" => {
+        (Method::GET, "index.html") => {
             let content = env
                 .get_template(stringify!(TEMPLATE_INDEX))
                 .unwrap()
@@ -91,13 +95,43 @@ async fn serve_req(req: Request<Body>, rx: watch::Receiver<Vec<u8>>) -> Result<R
                 .body(Bytes::from(content).into())
                 .unwrap())
         }
-        "favicon.png" => {
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "image/png")
-                .body(PUBLIC_FAVICON.into())
-                .unwrap())
-        }
+        (Method::GET, "favicon.png") => Ok(Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", "image/png")
+            .body(PUBLIC_FAVICON.into())
+            .unwrap()),
+        (Method::POST, "cast") => std::process::Command::new("bash")
+            .arg("/home/ah/cast.sh")
+            .status()
+            .map(|_| {
+                Response::builder()
+                    .status(StatusCode::NO_CONTENT)
+                    .body("".into())
+                    .unwrap()
+            })
+            .or_else(|e| {
+                Ok(Response::builder()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .header("Content-Type", "text/html")
+                    .body(format!("<h1>Error servicing request</h1><pre>{e}</pre></h1>").into())
+                    .unwrap())
+            }),
+        (Method::POST, "poweroff") => std::process::Command::new("bash")
+            .arg("/home/ah/poweroff.sh")
+            .status()
+            .map(|_| {
+                Response::builder()
+                    .status(StatusCode::NO_CONTENT)
+                    .body("".into())
+                    .unwrap()
+            })
+            .or_else(|e| {
+                Ok(Response::builder()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .header("Content-Type", "text/html")
+                    .body(format!("<h1>Error servicing request</h1><pre>{e}</pre></h1>").into())
+                    .unwrap())
+            }),
         _ => {
             eprintln!("not found: {:?}", req.uri());
             Ok(Response::builder()

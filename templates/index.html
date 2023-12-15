@@ -7,11 +7,14 @@
 	html { min-height: 100vh }
 	body, html { margin: 0; padding: 0; background-color: #444; }
 	h1 { position: absolute; left: 10px; top: 10px; color: white; font-family: Consolas, Console, Arial; }
+    button { padding: 10px }
 	</style>
 	<script src="https://unpkg.com/htmx.org@1.9.7"></script>
 </head>
-<body>
+<body >
 	<img src="/video.mjpg" style="height: 100%; width: 100%" onerror="window.location.reload()">
 	{% include "TEMPLATE_TIME" %}
+    <button hx-post="/cast">Cast</button>
+    <button hx-post="/poweroff">Shut Down</button>
 </body>
 </html>
