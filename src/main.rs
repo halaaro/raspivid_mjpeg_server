@@ -1,7 +1,8 @@
 use {
     hyper::{
+        body::Bytes,
         service::{make_service_fn, service_fn},
-        Body, body::Bytes, Request, Response, Result, Server, StatusCode,
+        Body, Request, Response, Result, Server, StatusCode,
     },
     minijinja::context,
     std::fs,
@@ -12,6 +13,11 @@ use {
     tokio::stream::StreamExt,
     tokio::sync::watch,
 };
+
+const TEMPLATE_INDEX: &str = include_str!("../templates/index.html");
+const TEMPLATE_TIME: &str = include_str!("../templates/partials/time.html");
+
+const PUBLIC_FAVICON: &[u8] = include_bytes!("../public/favicon.png");
 
 #[derive(StructOpt)]
 struct Opt {
@@ -39,7 +45,8 @@ async fn serve_req(req: Request<Body>, rx: watch::Receiver<Vec<u8>>) -> Result<R
         s => s.trim_start_matches('/'),
     };
     let mut env = minijinja::Environment::new();
-    env.set_loader(minijinja::path_loader("templates"));
+    env.add_template(stringify!(TEMPLATE_INDEX), TEMPLATE_INDEX).unwrap();
+    env.add_template(stringify!(TEMPLATE_TIME), TEMPLATE_TIME).unwrap();
     let time = std::process::Command::new("date")
         .output()
         .map(|o| o.stdout)
@@ -62,7 +69,7 @@ async fn serve_req(req: Request<Body>, rx: watch::Receiver<Vec<u8>>) -> Result<R
         }
         "time" => {
             let content = env
-                .get_template("partials/time.html")
+                .get_template(stringify!(TEMPLATE_TIME))
                 .unwrap()
                 .render(context!(time, time_is_close=>true))
                 .unwrap();
@@ -74,7 +81,7 @@ async fn serve_req(req: Request<Body>, rx: watch::Receiver<Vec<u8>>) -> Result<R
         }
         "index.html" => {
             let content = env
-                .get_template("index.html")
+                .get_template(stringify!(TEMPLATE_INDEX))
                 .unwrap()
                 .render(context!(time))
                 .unwrap();
@@ -84,14 +91,11 @@ async fn serve_req(req: Request<Body>, rx: watch::Receiver<Vec<u8>>) -> Result<R
                 .body(Bytes::from(content).into())
                 .unwrap())
         }
-        "favicon.png"  => {
-            let mut content = vec![];
-            let mut f = std::fs::File::open("public/favicon.png").unwrap();
-            f.read_to_end(&mut content).unwrap();
+        "favicon.png" => {
             Ok(Response::builder()
                 .status(StatusCode::OK)
                 .header("Content-Type", "image/png")
-                .body(content.into())
+                .body(PUBLIC_FAVICON.into())
                 .unwrap())
         }
         _ => {
