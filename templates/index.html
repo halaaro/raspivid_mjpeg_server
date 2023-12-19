@@ -4,17 +4,37 @@
 	<title>Bus Cam</title>
 	<link rel="icon" type="image/png" href="/favicon.png">
 	<style>
-	html { min-height: 100vh }
-	body, html { margin: 0; padding: 0; background-color: #444; }
-	h1 { position: absolute; left: 10px; top: 10px; color: white; font-family: Consolas, Console, Arial; }
-    button { padding: 10px }
+	html {
+        min-height: 100vh
+    }
+	body, html {
+        margin: 0; padding: 0; background-color: #444;
+    }
+	h1 {
+        position: absolute; left: 10px; top: 10px; color: white; font-family: Consolas, Console, Arial;
+    }
+    button {
+        padding: 10px
+    }
+    .button-container {
+        position: absolute;
+        display: flex;
+        top: 24px;
+        padding-right: 24px;
+        box-sizing: border-box;
+        gap: 10px;
+        width: 100%;
+        justify-content: end;
+    }
 	</style>
 	<script src="https://unpkg.com/htmx.org@1.9.7"></script>
 </head>
 <body >
 	<img src="/video.mjpg" style="height: 100%; width: 100%" onerror="window.location.reload()">
 	{% include "TEMPLATE_TIME" %}
-    <button hx-post="/cast">Cast</button>
-    <button hx-post="/poweroff">Shut Down</button>
+    <div class="button-container">
+        <button hx-post="/cast">Cast</button>
+        <button hx-post="/poweroff">Shut Down</button>
+    </div>
 </body>
 </html>
